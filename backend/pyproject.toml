@@ -1,0 +1,40 @@
+[project]
+name = "outputtracker-backend"
+version = "0.1.0"
+description = "AI evaluation, context lab & governance platform - API"
+authors = [
+    { name = "curiousrathin", email = "rathinpatel27@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "anthropic>=1.11.0",
+    "briefcase-ai>=4.4.0",
+    "duckdb>=1.5.6",
+    "faiss-cpu>=1.15.1",
+    "fastapi>=0.142.2",
+    "fastembed>=0.8.1",
+    "pandas>=3.0.6",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
+    "sqlmodel>=0.0.47",
+    "uvicorn[standard]>=0.54.0",
+]
+
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100

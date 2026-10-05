@@ -1,0 +1,4 @@
+id,question,expected_answer,source_refs,category,difficulty,assertion,notes
+G001,How much does Acme Corp owe on invoice 1042?,"5,000 USD",invoices.csv#row=1042,lookup,easy,contains,Replace these example rows with your own
+G002,Which department does the employee who approved invoice 1042 belong to?,Finance,invoices.csv#row=1042;employees.csv#row=17,multi-hop,medium,judge:answer_correct,Needs facts from two tables
+G003,What is Acme Corp's credit rating?,NOT_IN_DATA,,unanswerable,medium,judge:abstains_correctly,Model should say it does not know
