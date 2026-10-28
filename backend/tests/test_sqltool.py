@@ -52,3 +52,15 @@ def test_cannot_read_other_files(query):
 def test_sql_errors_are_reported(query):
     with pytest.raises(QueryError, match="(?i)column"):
         query.run("SELECT nope FROM data")
+
+
+def test_floats_display_cleanly(tmp_path):
+    path = tmp_path / "f.csv"
+    path.write_text("x\n0.1\n0.2\n")
+    q = DataQuery(path)
+    try:
+        result = q.run("SELECT SUM(x) AS total FROM data")
+    finally:
+        q.close()
+    assert result["columns"] == ["total"] and result["rows"] == [["0.3"]]
+    assert result["csv"].splitlines()[1] == "0.3"

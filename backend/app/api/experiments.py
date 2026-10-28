@@ -7,12 +7,15 @@ from sqlmodel import Session, func, select
 
 from app.api.configurations import get_configuration
 from app.api.datasets import get_dataset
-from app.core import arena, prompts
+from app.core import arena, golden, library, prompts
 from app.core import datasets as ds
+from app.core.evidence import store_cited
 from app.core.llm import MissingAPIKeyError, get_client
+from app.core.resolver import DraftResolver
 from app.core.sqltool import DataQuery
 from app.db import SessionDep
-from app.models import ArmResponse, Experiment, Trial
+from app.evals.service import current_scores, ensure_scores
+from app.models import ArmResponse, Experiment, Score, Trial
 
 router = APIRouter(prefix="/api", tags=["experiments"])
 
@@ -49,10 +52,13 @@ class TrialOut(BaseModel):
     experiment_id: str
     question: str
     config_version: str
+    library_files: list[dict]  # [{path, sha256}] the configured arm saw
+    golden_case_id: str  # "" until the question has a golden case
     preference: str | None
     note: str
     created_at: datetime
     responses: list[ArmResponse]
+    scores: list[Score]  # current-version evals for both arms and the trial
 
 
 def _get_experiment(session: Session, experiment_id: str) -> Experiment:
@@ -77,11 +83,15 @@ def _experiment_out(session: Session, e: Experiment) -> ExperimentOut:
     )
 
 
-def _trial_out(session: Session, trial: Trial) -> TrialOut:
+def _trial_out(session: Session, trial: Trial, scores: list[Score] | None = None) -> TrialOut:
     responses = session.exec(select(ArmResponse).where(ArmResponse.trial_id == trial.id)).all()
     order = {"baseline": 0, "configured": 1}
+    if scores is None:
+        scores = current_scores(session, [trial.id])[trial.id]
     return TrialOut(
-        **trial.model_dump(), responses=sorted(responses, key=lambda r: order.get(r.arm, 9))
+        **trial.model_dump(),
+        responses=sorted(responses, key=lambda r: order.get(r.arm, 9)),
+        scores=scores,
     )
 
 
@@ -116,6 +126,8 @@ def delete_experiment(experiment_id: str, session: SessionDep):
     for trial in session.exec(select(Trial).where(Trial.experiment_id == experiment_id)).all():
         for r in session.exec(select(ArmResponse).where(ArmResponse.trial_id == trial.id)).all():
             session.delete(r)
+        for s in session.exec(select(Score).where(Score.trial_id == trial.id)).all():
+            session.delete(s)
         session.delete(trial)
     session.delete(experiment)
     session.commit()
@@ -127,7 +139,9 @@ def list_trials(experiment_id: str, session: SessionDep):
     trials = session.exec(
         select(Trial).where(Trial.experiment_id == experiment_id).order_by(Trial.created_at.desc())
     ).all()
-    return [_trial_out(session, t) for t in trials]
+    ensure_scores(session, list(trials))  # backfills runs from before an eval existed
+    scores = current_scores(session, [t.id for t in trials])
+    return [_trial_out(session, t, scores[t.id]) for t in trials]
 
 
 @router.post("/experiments/{experiment_id}/trials", response_model=TrialOut)
@@ -139,24 +153,24 @@ def run_trial(experiment_id: str, body: TrialIn, session: SessionDep):
     config = get_configuration(session, experiment.configuration_id)
     dataset = get_dataset(session, config.dataset_id)
     try:
+        files = library.resolve_attachments(config.attachments)
+    except library.LibraryError as e:
+        raise HTTPException(422, str(e)) from e
+    try:
         client = get_client()
     except MissingAPIKeyError as e:
         raise HTTPException(400, str(e)) from e
 
-    # Both arms always get the same data mode, so the configuration stays the only difference.
+    # Every dataset is queried, never pasted into the prompt, so every number can be cited.
     csv_text = ds.read_text(dataset.id)
-    csv_path = None
-    if dataset.est_tokens <= ds.MAX_INLINE_TOKENS:
-        data_text = prompts.inline_data_text(dataset, csv_text)
-    else:
-        csv_path = ds.dataset_path(dataset.id)
-        query = DataQuery(csv_path)
-        try:
-            data_text = prompts.query_data_text(dataset, csv_text, query.schema())
-        finally:
-            query.close()
+    csv_path = ds.dataset_path(dataset.id)
+    query = DataQuery(csv_path)
+    try:
+        data_text = prompts.query_data_text(dataset, csv_text, query.schema())
+    finally:
+        query.close()
 
-    config_text = prompts.configuration_text(config, dataset)
+    config_text = prompts.configuration_text(config, dataset, files)
     systems = {
         "baseline": prompts.build_system(data_text, None),
         "configured": prompts.build_system(data_text, config_text),
@@ -167,18 +181,37 @@ def run_trial(experiment_id: str, body: TrialIn, session: SessionDep):
         question,
         tags={"experiment_id": experiment.id, "dataset_id": dataset.id},
         csv_path=csv_path,
+        source=dataset.sha256,
     )
+
+    # Persist what each arm cited, then render every draft fail-closed:
+    # one unknown {{ev:*}} reference and that arm's answer is refused, not shown.
+    for r in results:
+        store_cited(session, r["tool_calls"], dataset.sha256, dataset.id)
+    resolver = DraftResolver(session)
+    for r in results:
+        if not r.get("output"):
+            continue
+        rendered = resolver.render(r["output"])
+        r["render_ok"] = rendered.ok
+        r["rendered_output"] = rendered.text or ""
+        r["missing_refs"] = rendered.missing
 
     trial = Trial(
         experiment_id=experiment.id,
         question=question,
         config_version=prompts.config_version(config_text),
+        library_files=[{"path": f["path"], "sha256": f["sha256"]} for f in files],
     )
+    case = golden.match(session, dataset.id, question)  # exact match only; never "similar"
+    if case:
+        trial.golden_case_id = case.id
     session.add(trial)
     for r in results:
         session.add(ArmResponse(trial_id=trial.id, **r))
     session.commit()
     session.refresh(trial)
+    ensure_scores(session, [trial])  # every run is scored as soon as it exists
     return _trial_out(session, trial)
 
 

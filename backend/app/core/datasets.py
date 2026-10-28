@@ -6,11 +6,6 @@ import pandas as pd
 
 from app.config import settings
 
-# CSVs up to this (estimated) size are pasted into the prompt verbatim; larger
-# ones are queried through SQL. Claude's context window is 1M tokens and the
-# estimate below runs high, so this leaves room for instructions and answers.
-MAX_INLINE_TOKENS = 600_000
-
 
 class CSVError(ValueError):
     pass

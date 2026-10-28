@@ -5,6 +5,7 @@ from pathlib import Path
 import anthropic
 
 from app.config import settings
+from app.core.evidence import citation_block, cite_result
 from app.core.ledger import build_snapshot
 from app.core.prompts import system_as_text
 from app.core.sqltool import TOOL, DataQuery, QueryError
@@ -13,8 +14,11 @@ MAX_TOKENS = 16000
 MAX_TOOL_TURNS = 25
 
 
-def _run_tool(query: DataQuery, block) -> tuple[dict, dict]:
-    """Execute one query_data call -> (tool_result block, trace record)."""
+def _run_tool(query: DataQuery, block, source: str) -> tuple[dict, dict]:
+    """Execute one query_data call -> (tool_result block, trace record).
+
+    Each cell of a small result is minted as citable evidence; the ids are shown
+    to the model and kept on the trace so the caller can persist them."""
     sql = block.input.get("sql", "") if isinstance(block.input, dict) else ""
     try:
         result = query.run(sql)
@@ -26,11 +30,19 @@ def _run_tool(query: DataQuery, block) -> tuple[dict, dict]:
                 "content": f"Error: {e}",
                 "is_error": True,
             },
-            {"sql": sql, "error": str(e), "row_count": 0, "result": ""},
+            {"sql": sql, "error": str(e), "row_count": 0, "result": "", "evidence": []},
         )
+    cited = [] if result["truncated"] else cite_result(source, sql, result["columns"], result["rows"])
+    content = f"{result['csv']}\n{citation_block(cited, result['truncated'])}"
     return (
-        {"type": "tool_result", "tool_use_id": block.id, "content": result["csv"]},
-        {"sql": sql, "error": None, "row_count": result["row_count"], "result": result["csv"]},
+        {"type": "tool_result", "tool_use_id": block.id, "content": content},
+        {
+            "sql": sql,
+            "error": None,
+            "row_count": result["row_count"],
+            "result": result["csv"],
+            "evidence": cited,
+        },
     )
 
 
@@ -41,10 +53,12 @@ def run_arm(
     question: str,
     tags: dict[str, str],
     csv_path: Path | None = None,
+    source: str = "",
 ) -> dict:
     """Ask one arm the question. Never raises: failures are recorded on the response.
 
-    csv_path set -> query mode: the model reads the data through the query_data tool.
+    csv_path set -> query mode: the model reads the data through the query_data tool,
+    and `source` (the dataset's sha256) is hashed into every evidence id it cites.
     """
     model = settings.llm_model
     mode = "query" if csv_path else "inline"
@@ -85,7 +99,7 @@ def run_arm(
                 break
             # Append the assistant turn unchanged (thinking blocks included), then all results at once.
             messages.append({"role": "assistant", "content": response.content})
-            results = [_run_tool(query, b) for b in tool_uses]
+            results = [_run_tool(query, b, source) for b in tool_uses]
             messages.append({"role": "user", "content": [r for r, _ in results]})
             result["tool_calls"] += [t for _, t in results]
         else:
@@ -111,7 +125,9 @@ def run_arm(
 
     snapshot = build_snapshot(
         function_name=f"arena.{arm}",
-        inputs={"system": result["system_prompt"], "question": question},
+        # Settings are inputs too: briefcase's fingerprint ignores `params`, so without
+        # this a settings change would look like model drift.
+        inputs={"system": result["system_prompt"], "question": question, "settings": params},
         outputs={
             "response": result.get("output", ""),
             "tool_calls": result["tool_calls"],
@@ -133,10 +149,11 @@ def run_both(
     question: str,
     tags: dict[str, str],
     csv_path: Path | None = None,
+    source: str = "",
 ) -> list[dict]:
     with ThreadPoolExecutor(max_workers=len(systems)) as pool:
         futures = [
-            pool.submit(run_arm, client, arm, system, question, tags, csv_path)
+            pool.submit(run_arm, client, arm, system, question, tags, csv_path, source)
             for arm, system in systems.items()
         ]
         return [f.result() for f in futures]

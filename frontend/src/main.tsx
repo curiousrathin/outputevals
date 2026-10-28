@@ -9,6 +9,7 @@ import { ConfigWizard } from './pages/ConfigWizard'
 import { ConfigurationsPage } from './pages/ConfigurationsPage'
 import { DatasetsPage } from './pages/DatasetsPage'
 import { ExperimentsPage } from './pages/ExperimentsPage'
+import { LibraryPage } from './pages/LibraryPage'
 import { PlaceholderPage } from './pages/PlaceholderPage'
 import { SettingsPage } from './pages/SettingsPage'
 
@@ -25,7 +26,9 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/" element={<Navigate to="/experiments" replace />} />
               <Route path="/experiments" element={<ExperimentsPage />} />
               <Route path="/experiments/:id" element={<ArenaPage />} />
+              <Route path="/experiments/:id/evals" element={<ArenaPage tab="evals" />} />
               <Route path="/datasets" element={<DatasetsPage />} />
+              <Route path="/library" element={<LibraryPage />} />
               <Route path="/configurations" element={<ConfigurationsPage />} />
               <Route path="/configurations/new" element={<ConfigWizard />} />
               <Route path="/configurations/:id" element={<ConfigWizard />} />

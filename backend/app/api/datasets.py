@@ -6,7 +6,7 @@ from sqlmodel import Session, select
 
 from app.core import datasets as ds
 from app.db import SessionDep
-from app.models import Configuration, Dataset
+from app.models import Configuration, Dataset, GoldenCase
 
 router = APIRouter(prefix="/api/datasets", tags=["datasets"])
 
@@ -70,6 +70,8 @@ def delete_dataset(dataset_id: str, session: SessionDep):
     dataset = get_dataset(session, dataset_id)
     if session.exec(select(Configuration).where(Configuration.dataset_id == dataset_id)).first():
         raise HTTPException(409, "Dataset is used by a configuration. Delete those first.")
+    if session.exec(select(GoldenCase).where(GoldenCase.dataset_id == dataset_id)).first():
+        raise HTTPException(409, "Dataset has golden cases. Delete those first.")
     session.delete(dataset)
     session.commit()
     ds.dataset_path(dataset_id).unlink(missing_ok=True)

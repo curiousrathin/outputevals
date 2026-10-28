@@ -5,11 +5,11 @@ difference the model sees is the configuration block appended for the
 configured arm. The shared prefix also carries the cache breakpoint, so both
 arms reuse the same cached data.
 
-Data modes:
-- inline: the original CSV, verbatim, when it fits in the context window.
-- query:  larger CSVs are loaded into a SQL table; the prompt carries the
-          schema and the first rows of the original file, and the model reads
-          the rest through the query_data tool.
+Every dataset is queried, never pasted in: the CSV is loaded into a SQL table,
+the prompt carries the schema and the first rows of the original file, and the
+model reads the data through the query_data tool. Query results come back with
+evidence ids, and the answer must cite values as {{ev:…}} references so the
+fail-closed resolver can check every one before anything is shown.
 """
 
 import hashlib
@@ -17,19 +17,28 @@ import hashlib
 from app.models import Configuration, Dataset
 
 INSTRUCTIONS = """You are a data analyst answering questions about a CSV dataset.
-Answer using only the data provided. Cite the specific rows or values that support your answer.
-If the data does not contain the answer, say so plainly instead of guessing."""
+Answer using only the data. If the data does not contain the answer, say so plainly instead of guessing."""
 
-QUERY_INSTRUCTIONS = """The dataset is too large to include in full. It is loaded as a DuckDB table named `data` \
-with every row of the original file. Use the query_data tool to read it: aggregate in SQL instead of fetching raw \
-rows, and base every number in your answer on query results."""
+QUERY_INSTRUCTIONS = """The dataset is loaded as a DuckDB table named `data` with every row of the original file. \
+The first rows below are only a preview. Use the query_data tool to read the data: aggregate in SQL instead of \
+fetching raw rows.
+
+Every query result lists evidence ids for its values. In your answer, write each value that comes from the data \
+as its reference, for example "The top customer was {{ev:7f3a91c2d0e4}} with {{ev:c91e04b7aa21}}." Never type a \
+number or data value yourself, and never invent an id: an answer with any unknown reference is rejected entirely. \
+If a result has no evidence ids, aggregate further until it does."""
 
 CONFIG_PREAMBLE = "The dataset owner provided the following to help you interpret the data:"
 SAMPLE_LINES = 20
 
 
-def configuration_text(config: Configuration, dataset: Dataset) -> str:
-    """Render a configuration as prompt text. Empty string if it adds nothing."""
+def configuration_text(
+    config: Configuration, dataset: Dataset, files: list[dict] | None = None
+) -> str:
+    """Render a configuration as prompt text. Empty string if it adds nothing.
+
+    `files` are the resolved library attachments ({path, text}); their content is
+    part of the text, so editing an attached file changes the config version."""
     dtypes = {c["name"]: c["dtype"] for c in dataset.columns}
     parts = []
 
@@ -50,6 +59,10 @@ def configuration_text(config: Configuration, dataset: Dataset) -> str:
         lines.append("</data_dictionary>")
         parts.append("\n".join(lines))
 
+    if files:
+        docs = "\n".join(f'<file path="{f["path"]}">\n{f["text"].strip()}\n</file>' for f in files)
+        parts.append(f"<library>\n{docs}\n</library>")
+
     if config.context_markdown.strip():
         parts.append(
             f"<additional_context>\n{config.context_markdown.strip()}\n</additional_context>"
@@ -59,10 +72,6 @@ def configuration_text(config: Configuration, dataset: Dataset) -> str:
 
 def config_version(config_text: str) -> str:
     return hashlib.sha256(config_text.encode()).hexdigest()[:16]
-
-
-def inline_data_text(dataset: Dataset, csv_text: str) -> str:
-    return f'{INSTRUCTIONS}\n\n<dataset filename="{dataset.filename}">\n{csv_text}\n</dataset>'
 
 
 def query_data_text(dataset: Dataset, csv_text: str, schema: list[tuple[str, str]]) -> str:

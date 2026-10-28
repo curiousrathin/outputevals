@@ -42,6 +42,15 @@ class QueryError(ValueError):
     pass
 
 
+def _display(value) -> str | None:
+    """Stable text for a cell: SUM over doubles prints 149410.09, not 149410.09000000001."""
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else format(value, ".12g")
+    return str(value)
+
+
 class DataQuery:
     def __init__(self, csv_path: Path):
         self.con = duckdb.connect()
@@ -56,7 +65,8 @@ class DataQuery:
         return [(r[0], r[1]) for r in self.con.execute("DESCRIBE data").fetchall()]
 
     def run(self, sql: str) -> dict:
-        """Execute one query. Returns {csv, row_count, truncated}; raises QueryError."""
+        """Execute one query. Returns {csv, row_count, truncated, columns, rows};
+        raises QueryError. Cell values are display strings (None stays None)."""
         sql = sql.strip().rstrip(";").strip()
         if ";" in sql:
             raise QueryError("Only one statement per query.")
@@ -72,7 +82,7 @@ class DataQuery:
             raise QueryError(str(e).splitlines()[0]) from e
 
         truncated = len(rows) > MAX_RESULT_ROWS
-        rows = rows[:MAX_RESULT_ROWS]
+        rows = [[_display(v) for v in row] for row in rows[:MAX_RESULT_ROWS]]
         out = io.StringIO()
         writer = csv.writer(out)
         writer.writerow(columns)
@@ -82,7 +92,13 @@ class DataQuery:
             text, truncated = text[:MAX_RESULT_CHARS], True
         if truncated:
             text += f"\n[Result truncated. Showing up to {MAX_RESULT_ROWS} rows; aggregate to see everything.]"
-        return {"csv": text, "row_count": len(rows), "truncated": truncated}
+        return {
+            "csv": text,
+            "row_count": len(rows),
+            "truncated": truncated,
+            "columns": columns,
+            "rows": rows,
+        }
 
     def close(self) -> None:
         self.con.close()

@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -190,14 +191,17 @@ class FakeClaudeWithSQL:
         )
 
 
-def test_large_csv_uses_sql_mode(client, monkeypatch):
-    monkeypatch.setattr("app.core.datasets.MAX_INLINE_TOKENS", 0)  # force query mode
+def _big_experiment(client) -> dict:
+    """2000 invoices over 5 customers; Customer 4 has the highest total (400600)."""
     rows = "\n".join(f"{i},Customer {i % 5},{i}" for i in range(2000))
     csv = f"invoice_id,customer,amount\n{rows}\n".encode()
     ds = client.post("/api/datasets", files={"file": ("big.csv", csv, "text/csv")}).json()
     cfg = client.post("/api/configurations", json={"name": "c", "dataset_id": ds["id"]}).json()
-    exp = client.post("/api/experiments", json={"name": "e", "configuration_id": cfg["id"]}).json()
+    return client.post("/api/experiments", json={"name": "e", "configuration_id": cfg["id"]}).json()
 
+
+def test_large_csv_is_queried_not_pasted(client, monkeypatch):
+    exp = _big_experiment(client)
     fake = FakeClaudeWithSQL()
     monkeypatch.setattr("app.api.experiments.get_client", lambda: fake)
     trial = client.post(
@@ -213,3 +217,90 @@ def test_large_csv_uses_sql_mode(client, monkeypatch):
         assert '"customer" VARCHAR' in r["system_prompt"]
         assert "1999,Customer 4" not in r["system_prompt"]
     assert all(call["tools"][0]["name"] == "query_data" for call in fake.calls)
+
+
+class FakeClaudeCiting:
+    """Runs one query, then answers by citing the evidence ids the result listed.
+
+    invent=True swaps the second id for one that was never minted."""
+
+    def __init__(self, invent: bool = False):
+        self.invent = invent
+        self.calls = []
+        self.messages = self
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        usage = SimpleNamespace(
+            input_tokens=50, output_tokens=10, cache_creation_input_tokens=0, cache_read_input_tokens=0
+        )
+        last = kwargs["messages"][-1]
+        if isinstance(last["content"], str):
+            sql = "SELECT customer, SUM(amount) AS total FROM data GROUP BY 1 ORDER BY 2 DESC LIMIT 1"
+            block = SimpleNamespace(type="tool_use", id="tu_1", name="query_data", input={"sql": sql})
+            return SimpleNamespace(
+                content=[block], stop_reason="tool_use", stop_details=None, usage=usage
+            )
+        refs = re.findall(r"\{\{(ev:[0-9a-f]+)\}\}", last["content"][0]["content"])
+        if self.invent:
+            refs[1] = "ev:000000000000"
+        text = SimpleNamespace(
+            type="text", text=f"Top customer: {{{{{refs[0]}}}}} with {{{{{refs[1]}}}}}."
+        )
+        return SimpleNamespace(content=[text], stop_reason="end_turn", stop_details=None, usage=usage)
+
+
+def test_answers_cite_evidence_and_render(client, monkeypatch):
+    exp = _big_experiment(client)
+    monkeypatch.setattr("app.api.experiments.get_client", lambda: FakeClaudeCiting())
+    trial = client.post(
+        f"/api/experiments/{exp['id']}/trials", json={"question": "Top customer?"}
+    ).json()
+
+    for r in trial["responses"]:
+        assert "{{ev:" in r["output"]  # the raw draft keeps its references
+        assert r["render_ok"] is True and r["missing_refs"] == []
+        assert r["rendered_output"] == "Top customer: Customer 4 with 400600."
+        cited = r["tool_calls"][0]["evidence"]
+        assert [(c["label"], c["value"]) for c in cited] == [
+            ('row 0 · "customer"', "Customer 4"),
+            ('row 0 · "total"', "400600"),
+        ]
+
+    # Same query on the same data -> both arms cite the same content-addressed ids,
+    # and the store holds one row per id, not one per arm.
+    baseline, configured = trial["responses"]
+    ev_id = baseline["tool_calls"][0]["evidence"][1]["ev_id"]
+    assert configured["tool_calls"][0]["evidence"][1]["ev_id"] == ev_id
+    body = client.get(f"/api/evidence/{ev_id}").json()
+    assert body["value"] == "400600" and body["history"] == ["400600"]
+    assert "SUM(amount)" in body["query"]
+
+
+def test_unknown_reference_refuses_the_whole_answer(client, monkeypatch):
+    exp = _big_experiment(client)
+    monkeypatch.setattr("app.api.experiments.get_client", lambda: FakeClaudeCiting(invent=True))
+    trial = client.post(
+        f"/api/experiments/{exp['id']}/trials", json={"question": "Top customer?"}
+    ).json()
+
+    for r in trial["responses"]:
+        assert r["render_ok"] is False
+        assert r["missing_refs"] == ["ev:000000000000"]
+        # Nothing renders, not even the customer name that did resolve.
+        assert r["rendered_output"] == ""
+        assert "{{ev:000000000000}}" in r["output"]  # kept on the trace for debugging
+    assert client.get("/api/evidence/ev:000000000000").status_code == 404
+
+
+def test_settings_change_changes_fingerprint(monkeypatch):
+    from app.core import arena
+
+    system = [{"type": "text", "text": "Instructions"}]
+    before = arena.run_arm(FakeClaude(), "baseline", system, "Q", tags={})
+    monkeypatch.setattr(settings, "llm_effort", "high")
+    after = arena.run_arm(FakeClaude(), "baseline", system, "Q", tags={})
+
+    assert before["output"] == after["output"]
+    # Same question, same answer, different settings: a different input group, not drift.
+    assert before["fingerprint"] != after["fingerprint"]

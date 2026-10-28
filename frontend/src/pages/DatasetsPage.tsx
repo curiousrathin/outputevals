@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowRight } from 'lucide-react'
 import { Topbar } from '../components/Topbar'
 import { DatasetList, PreviewTable, UploadZone } from '../components/DatasetPicker'
-import { api, MAX_INLINE_TOKENS } from '../api'
+import { api } from '../api'
 
 export function DatasetsPage() {
   const navigate = useNavigate()
@@ -40,12 +40,10 @@ export function DatasetsPage() {
                     Configure <ArrowRight size={15} />
                   </button>
                 </div>
-                {current.est_tokens > MAX_INLINE_TOKENS && (
-                  <div className="notice notice-info">
-                    Too large to paste into a prompt whole, so both arms get every row as a SQL table and Claude queries
-                    it. Every query is logged under "What the model saw".
-                  </div>
-                )}
+                <div className="notice notice-info">
+                  Both arms read every row through SQL, and every number in an answer must cite the query result it
+                  came from. Every query is logged under "What the model saw".
+                </div>
                 <div className="field-chips">
                   {current.columns.map((c) => (
                     <span key={c.name} className="field-chip">

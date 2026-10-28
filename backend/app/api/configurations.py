@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.api.datasets import get_dataset
+from app.core import library
 from app.core.prompts import configuration_text
 from app.db import SessionDep
 from app.models import Configuration, Experiment, new_id, utcnow
@@ -29,6 +30,7 @@ class ConfigurationIn(BaseModel):
     dataset_id: str
     nodes: list[ConfigNode] = []
     edges: list[ConfigEdge] = []
+    attachments: list[str] = []  # library folders or files
     context_markdown: str = ""
 
 
@@ -38,8 +40,10 @@ class ConfigurationOut(BaseModel):
     dataset_id: str
     nodes: list[dict]
     edges: list[dict]
+    attachments: list[str]
     context_markdown: str
     prompt_preview: str  # exactly what the configured arm adds to the prompt
+    attachment_error: str | None = None  # an attachment went missing from the library
 
 
 def get_configuration(session: Session, config_id: str) -> Configuration:
@@ -51,11 +55,17 @@ def get_configuration(session: Session, config_id: str) -> Configuration:
 
 def _out(session: Session, config: Configuration) -> ConfigurationOut:
     dataset = get_dataset(session, config.dataset_id)
+    error = None
+    try:
+        files = library.resolve_attachments(config.attachments)
+    except library.LibraryError as e:
+        files, error = [], str(e)
     return ConfigurationOut(
         **config.model_dump(
-            include={"id", "name", "dataset_id", "nodes", "edges", "context_markdown"}
+            include={"id", "name", "dataset_id", "nodes", "edges", "attachments", "context_markdown"}
         ),
-        prompt_preview=configuration_text(config, dataset),
+        prompt_preview=configuration_text(config, dataset, files),
+        attachment_error=error,
     )
 
 
@@ -85,10 +95,16 @@ def _apply(session: Session, config: Configuration, body: ConfigurationIn) -> No
             raise HTTPException(422, f"Describe the connection {e.source} → {e.target}.")
         edges.append({**e.model_dump(), "id": e.id or new_id()})
 
+    try:
+        attachments = library.validate_attachments(body.attachments)
+    except library.LibraryError as e:
+        raise HTTPException(422, str(e)) from e
+
     config.name = body.name.strip() or "Untitled configuration"
     config.dataset_id = body.dataset_id
     config.nodes = nodes
     config.edges = edges
+    config.attachments = attachments
     config.context_markdown = body.context_markdown
     config.updated_at = utcnow()
 

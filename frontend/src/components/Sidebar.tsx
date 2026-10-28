@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Bookmark, Database, FlaskConical, Plus, Settings, Workflow } from 'lucide-react'
+import { Activity, Bookmark, Database, FlaskConical, Library, Plus, Settings, Workflow } from 'lucide-react'
 import { api } from '../api'
 import { NewExperimentModal } from './NewExperimentModal'
 
 const nav = [
   { to: '/experiments', label: 'Experiments', icon: FlaskConical, end: true },
   { to: '/datasets', label: 'Datasets', icon: Database },
+  { to: '/library', label: 'Library', icon: Library },
   { to: '/configurations', label: 'Configurations', icon: Workflow },
   { to: '/observability', label: 'Observability', icon: Activity },
   { to: '/saved', label: 'Saved attempts', icon: Bookmark },
