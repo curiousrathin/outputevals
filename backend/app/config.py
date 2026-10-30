@@ -10,9 +10,17 @@ class Settings(BaseSettings):
 
     data_dir: Path = ROOT / "data"
     database_url: str = f"sqlite:///{ROOT / 'data' / 'outputtracker.db'}"
+    # Skill library (Markdown on disk). Defaults to data/library, which is gitignored so
+    # client knowledge stays out of this repo; point it at its own git repo to version it.
+    library_dir: Path | None = None
 
     llm_model: str = "claude-opus-5-5"
     llm_effort: str = "medium"  # low | medium | high | xhigh | max
+    # Extra or overriding prices for the cost eval (USD per million tokens); see evals/pricing.py.
+    model_prices: dict[str, dict[str, float]] = {}
+    # Batches: runs asked at once (each asks both arms), and the most runs one batch may hold.
+    batch_concurrency: int = 3
+    batch_max_runs: int = 200
     judge_model: str = "claude-opus-5-5"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
 

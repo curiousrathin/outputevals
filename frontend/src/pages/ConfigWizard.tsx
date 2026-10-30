@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react'
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, Check, FileText } from 'lucide-react'
 import { Topbar } from '../components/Topbar'
 import { DatasetList, PreviewTable, UploadZone } from '../components/DatasetPicker'
 import { GraphEditor } from '../components/GraphEditor'
+import { LibraryTree } from '../components/LibraryTree'
 import { api, type ConfigEdge, type ConfigNode, type Configuration, type Dataset } from '../api'
 
 const steps = ['Dataset', 'Fields & connections', 'Context', 'Save']
@@ -35,6 +36,13 @@ function Wizard({ initial }: { initial?: Configuration }) {
   const [nodeState, setNodes] = useState<ConfigNode[]>(initial?.nodes ?? [])
   const [edges, setEdges] = useState<ConfigEdge[]>(initial?.edges ?? [])
   const [context, setContext] = useState(initial?.context_markdown ?? '')
+  const [attachments, setAttachments] = useState<string[]>(initial?.attachments ?? [])
+  const library = useQuery({ queryKey: ['library'], queryFn: api.libraryTree })
+  // Attaching a folder replaces any attachments inside it; the folder already covers them.
+  const toggleAttachment = (path: string) =>
+    setAttachments((cur) =>
+      cur.includes(path) ? cur.filter((a) => a !== path) : [...cur.filter((a) => !a.startsWith(`${path}/`)), path],
+    )
   const [createExperiment, setCreateExperiment] = useState(isNew)
   const [experimentName, setExperimentName] = useState('')
   const mdInput = useRef<HTMLInputElement>(null)
@@ -53,7 +61,7 @@ function Wizard({ initial }: { initial?: Configuration }) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = { name: name.trim() || defaultName, dataset_id: datasetId, nodes, edges, context_markdown: context }
+      const body = { name: name.trim() || defaultName, dataset_id: datasetId, nodes, edges, attachments, context_markdown: context }
       const config = isNew ? await api.createConfiguration(body) : await api.updateConfiguration(id!, body)
       if (createExperiment) {
         return { config, experiment: await api.createExperiment({ name: experimentName.trim() || defaultExperimentName, configuration_id: config.id }) }
@@ -124,8 +132,22 @@ function Wizard({ initial }: { initial?: Configuration }) {
             <>
               <h2 className="h2">Any more context?</h2>
               <p className="lead">
-                Add domain knowledge, business rules or instructions as Markdown, like a Claude skill file. Optional.
+                Attach skills or files from the <Link to="/library" className="link-muted" style={{ textDecoration: 'underline' }}>library</Link>.
+                Only attach what this configuration needs; less context is often better. Optional.
               </p>
+              {initial?.attachment_error && <div className="notice notice-err">{initial.attachment_error}</div>}
+              <section className="panel" style={{ marginBottom: 24 }}>
+                <div className="panel-head">
+                  <div className="panel-title">Library</div>
+                  <span className="muted small">{attachments.length ? `${attachments.length} attached` : 'Nothing attached'}</span>
+                </div>
+                {library.data && library.data.length > 0 ? (
+                  <LibraryTree nodes={library.data} attached={attachments} onToggle={toggleAttachment} />
+                ) : (
+                  <p className="muted small">The library is empty. Add skills on the Library page, then attach them here.</p>
+                )}
+              </section>
+              <label className="label">Notes for this configuration only</label>
               <div className="md-toolbar">
                 <button className="btn" onClick={() => mdInput.current?.click()}>
                   <FileText size={15} /> Load .md file
@@ -163,7 +185,8 @@ function Wizard({ initial }: { initial?: Configuration }) {
                   <dt>Dataset</dt><dd>{dataset.data?.filename}</dd>
                   <dt>Fields</dt><dd>{nodes.filter((n) => n.description.trim()).length} of {nodes.length} described</dd>
                   <dt>Connections</dt><dd>{edges.length}</dd>
-                  <dt>Context</dt><dd>{context.trim() ? `${context.length.toLocaleString()} characters` : 'None'}</dd>
+                  <dt>Library</dt><dd>{attachments.length ? attachments.join(', ') : 'None'}</dd>
+                  <dt>Notes</dt><dd>{context.trim() ? `${context.length.toLocaleString()} characters` : 'None'}</dd>
                 </dl>
 
                 <label className="check">
@@ -187,7 +210,7 @@ function Wizard({ initial }: { initial?: Configuration }) {
             ) : <span />}
             {step < 3 ? (
               <button className="btn btn-primary" disabled={!canNext} onClick={() => setStep(step + 1)}>
-                {step === 2 && !context.trim() ? 'Skip' : 'Next'} <ArrowRight size={15} />
+                {step === 2 && !context.trim() && !attachments.length ? 'Skip' : 'Next'} <ArrowRight size={15} />
               </button>
             ) : (
               <button className="btn btn-primary" disabled={save.isPending} onClick={() => save.mutate()}>
