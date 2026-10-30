@@ -1,6 +1,6 @@
 # Current Build
 
-*What exists in `outputevals` today, as of 2026-10-26. Use it to decide what to keep, trim or add next. The plan for where it's going lives in [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md).*
+*What exists in `outputevals` today, as of 2026-10-29. Use it to decide what to keep, trim or add next. The plan for where it's going lives in [PROJECT_OUTLINE.md](PROJECT_OUTLINE.md).*
 
 ---
 
@@ -11,9 +11,9 @@ A local web app that asks the same question of a dataset twice: a **baseline** a
 | | |
 |---|---|
 | **Repo / branch** | `~/dev/outputevals`, branch `phase-0-merge` |
-| **Committed?** | No. 41 changed or new files on top of `0e8fc42` |
+| **Committed?** | Up to eval step 2 (`cf08bf1`). Step 3 (batches) is uncommitted |
 | **Size** | Backend ~2,400 lines of Python · frontend ~2,700 lines of TypeScript/CSS |
-| **Tests** | 91 backend tests, all passing · frontend checked by type-check, build and lint only |
+| **Tests** | 108 backend tests, all passing · frontend checked by type-check and build only |
 | **Run it** | `cd ~/dev/outputevals/backend && .venv/bin/uvicorn app.main:app --port 8000` → http://localhost:8000 |
 | **UI edits** | Rebuild with `npm run build` in `frontend/` (needs Node 22.12+), or `npm run dev` for hot reload on port 5173 |
 
@@ -101,7 +101,7 @@ Status key: **Working** (built and tested) · **Manual** (works, no automated te
 | Fingerprint + content hash | Working | Briefcase; settings are now part of the fingerprint, so a settings change isn't mistaken for drift |
 | Config version | Working | Hash of the full configuration text, including attached file contents |
 
-### Evals (steps 0, 1 and 2)
+### Evals (steps 0–3)
 | Feature | Status | Notes |
 |---|---|---|
 | Scored on every run | Working | Each new trial is scored the moment it's saved; older trials are scored from their stored traces the first time they're viewed. No model calls |
@@ -115,6 +115,12 @@ Status key: **Working** (built and tested) · **Manual** (works, no automated te
 | Reference evals | Working | Expected numbers (within a tolerance) · Expected text · Abstained correctly · Right columns used · Execution accuracy. Locked until the question has a golden answer |
 | Golden answers | Working | "Set as correct answer" on any arm, pre-filled from that run (values it cited, columns its SQL used, its last query, a category); checked and edited by a person before saving. Pinned to the dataset and its hash, never to a configuration. Editing bumps the version and re-grades linked runs from their traces |
 | Matching runs to golden answers | Working | Exact question match after normalizing case, spacing and trailing punctuation, or an explicit link. Similar questions are never graded against each other |
+| Correct | Working | One verdict per run against the golden answer: expected numbers and text both pass (or, for unanswerable questions, it abstained). Errors and refused answers are incorrect. Batches build on it |
+| Batches | Working | Ask chosen golden questions N times (1–20) on both arms in the background; 3 runs at a time (`OT_BATCH_CONCURRENCY`), at most 200 runs (`OT_BATCH_MAX_RUNS`). Runs go in rounds so a cancelled batch still covers each question evenly. Configuration, model and settings frozen at start. Cancel keeps finished runs; 3 runs in a row that can't reach the API stop it; batches left running by a restart are marked interrupted |
+| Batch estimate | Working | Runs, model calls, cost and minutes, from this experiment's earlier runs; shown before starting |
+| Batch report | Manual | Per arm: accuracy with a 95% interval, right every time (pass^k), right at least once (pass@k), same answer every time, cost, median/p95 latency. Configured − baseline difference with an interval and a plain verdict. Per question: ✓/✗ for each run, with how many different answers. Every pass/fail eval with an interval |
+| Error bars | Working | Two-level bootstrap (resample questions, then runs within each), seeded per batch, 2,000 draws. Each question counts once. `app/evals/stats.py` |
+| Run scope | Manual | Evals tab scorecard and runs table can show everywhere, the arena only, or one batch. The arena shows only questions asked by hand, with a pointer to batch runs |
 | Golden answers on the Evals tab | Manual | List with linked-run counts and edit; coverage ("2 of 4 runs graded"); filters for incorrect answers and runs without a golden answer |
 
 ### Settings and serving
@@ -135,7 +141,8 @@ Status key: **Working** (built and tested) · **Manual** (works, no automated te
 | `dataset` | One uploaded CSV | `sha256` (feeds evidence ids), `columns` profile, `est_tokens` |
 | `configuration` | Graph + attachments + notes | `nodes`, `edges`, `attachments`, `context_markdown` |
 | `experiment` | A named pairing of one configuration with its dataset | `configuration_id` |
-| `trial` | One question | `config_version`, `library_files` [{path, sha256}], `golden_case_id`, `preference`, `note` |
+| `trial` | One question | `config_version`, `library_files` [{path, sha256}], `golden_case_id`, `batch_id` + `repeat` ("" for arena questions), `preference`, `note` |
+| `batch` | The golden set asked N times | `golden_case_ids`, `repeats`, `total`, `done`, `status` (running / done / cancelled / failed / interrupted), `error`, `config_version`, `model`, `settings` |
 | `armresponse` | One arm's answer + trace | `tool_calls` (with evidence), `output` (draft), `render_ok`, `rendered_output`, `missing_refs`, `system_prompt`, tokens, `latency_ms`, `fingerprint`, `content_hash`, `mode` |
 | `evidence` | Append-only facts | `ev_id`, `value`, `source`, `query`, `label`, `superseded_by` |
 | `golden_case` | A question with a verified answer | `dataset_id` + `dataset_sha` it was checked against, `question_key`, `answerable`, `expected_values`, `tolerance`, `expected_columns`, `reference_sql`, `category`, `held_out`, `version`; `workflow_id` and `params` reserved for workflows |
@@ -145,7 +152,7 @@ New columns are added automatically on startup (`db.py`); there are no other mig
 
 ---
 
-## 5. API (36 endpoints)
+## 5. API (42 endpoints)
 
 | Area | Endpoints |
 |---|---|
@@ -157,6 +164,7 @@ New columns are added automatically on startup (`db.py`); there are no other mig
 | Library | `GET /api/library/tree`, `GET/PUT /api/library/file`, `POST /api/library/folder`, `DELETE /api/library/item` |
 | Evals | `GET /api/evals/scorers`, `GET /api/experiments/{id}/evals`, `POST /api/experiments/{id}/evals/rescore`; trials also carry their scores |
 | Golden answers | `GET /api/datasets/{id}/golden`, `GET /api/trials/{id}/golden-draft`, `POST /api/golden`, `PUT/DELETE /api/golden/{id}` |
+| Batches | `GET/POST /api/experiments/{id}/batches`, `GET /api/experiments/{id}/batches/estimate`, `GET/DELETE /api/batches/{id}` (with report), `POST /api/batches/{id}/cancel`; trials and evals take `?scope=all\|arena\|<batch id>` |
 | Health | `GET /api/health` |
 
 ---
@@ -189,7 +197,9 @@ New columns are added automatically on startup (`db.py`); there are no other mig
 | 8 | **Configurations are edited in place** | History is reconstructable but not first-class | Medium: append-only versions |
 | 9 | **The whole graph and every attached file go into the prompt** | Fine while small; no selection yet | Later: graph as index, `read_doc` tool (Phase 7) |
 | 10 | **One CSV per dataset.** No joins, database connectors, or cleaning/transform steps | Limits real client use | Large |
-| 11 | **No batches, statistics or judges yet.** Correctness is graded per run against golden answers, but there's no repeated running, error bars, or LLM judge | Single runs can't prove a difference | Steps 3–6 |
+| 11 | **No significance tests, pinned baselines or judges yet.** Batches give error bars and pass^k, but no McNemar test, row-level diffs between batches, or LLM judge | Can show noise, can't yet compare two batches row by row | Steps 4–6 |
+| 17 | **Batches run in the server process.** Restarting the server interrupts a running batch (it's marked interrupted; finished runs are kept) | Long batches need the server left running | Medium: a job queue, later |
+| 18 | **Consistency compares cited values only.** Two prose answers with no citations count as the same answer | Over-states consistency for answers that don't cite | Small: compare rendered numbers too |
 | 16 | **Golden answers are edited in place** (version number + re-grade), not stored as separate rows; "Abstained correctly" is a keyword heuristic | History of old answers isn't kept; honesty grading is rough | Append-only versions later; LLM judge in step 5 |
 | 12 | **Local, single user.** No auth; secrets in `.env` | Fine for now | Later |
 | 13 | **No frontend tests** | UI regressions are caught only by hand | Medium |
@@ -226,13 +236,13 @@ In the order the outline suggests. Tick what to build.
 **Phase 1: prove it**
 - [x] Eval steps 0 and 1: score storage, registry with requirements, four states, always-on evals, Evals tab
 - [x] Step 2: golden answers ("Set as correct answer") and reference evals: expected numbers, expected text, abstained correctly, right columns used, execution accuracy
-- [ ] Step 3: batches (run the golden set N times), consistency, error bars
+- [x] Step 3: batches (run the golden set N times), consistency, error bars
 - [ ] Append-only configuration versions (gap 8)
 - [ ] Build each dataset's DuckDB file once (gap 5)
 
 **Phase 2: explain it**
 - [ ] Promote an arena question to the golden set (with a "fields that unlock evals" hint)
-- [ ] Repeated trials and consistency (pass^k)
+- [x] Repeated trials and consistency (pass^k), in step 3
 - [ ] Row-level diffs and flip rate between runs
 - [ ] Visual trace view: the read-only graph with used columns glowing (Phase 2v)
 - [ ] A state-driven "next step" guide (the game-like prompts)
@@ -254,14 +264,15 @@ outputevals/
 │   │   ├── main.py            app, routers, serves the built frontend
 │   │   ├── config.py          OT_* settings (model, effort, data and library dirs)
 │   │   ├── db.py              SQLite engine, add-missing-columns migration
-│   │   ├── models.py          the eight tables
+│   │   ├── models.py          the nine tables
 │   │   ├── api/               HTTP layer: settings, datasets, configurations,
-│   │   │                      experiments, evidence, library, evals, golden
+│   │   │                      experiments, evidence, library, evals, golden, batches
 │   │   ├── evals/
 │   │   │   ├── registry.py    eval metadata, the four states, requirements → locked
 │   │   │   ├── builtin.py     the seven always-on evals
 │   │   │   ├── reference.py   the five evals graded against a golden answer
 │   │   │   ├── service.py     score on create, backfill, re-score, scorecard
+│   │   │   ├── stats.py       batch report: accuracy intervals, pass^k, pass@k, consistency
 │   │   │   ├── numbers.py     finds numbers typed outside references
 │   │   │   └── pricing.py     list prices for the cost eval
 │   │   └── core/
@@ -271,12 +282,14 @@ outputevals/
 │   │       ├── evidence.py    content-addressed, append-only evidence + citing
 │   │       ├── resolver.py    fail-closed render
 │   │       ├── golden.py      matching runs to golden answers, drafting one from a run
+│   │       ├── runner.py      one question through both arms, saved and scored (arena + batches)
+│   │       ├── batches.py     background batch runs, cancel, interrupted-on-restart
 │   │       ├── library.py     skill files on disk, path safety, attachments
 │   │       ├── datasets.py    CSV profiling and storage
 │   │       ├── ledger.py      thin Briefcase wrapper
 │   │       ├── llm.py         Anthropic client, key check
 │   │       └── secrets.py     key lookup and storage
-│   └── tests/                 91 tests: evidence 19, golden 16, evals 16, library 14,
+│   └── tests/                 108 tests: evidence 19, batches 17, golden 16, evals 16, library 14,
 │                              sqltool 10, workflow 7, settings 5, smoke 4
 ├── frontend/src/
 │   ├── pages/                 Experiments, Arena, Datasets, Library,

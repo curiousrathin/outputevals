@@ -6,6 +6,7 @@ import { api, timeAgo, type Arm, type Experiment, type GoldenCase, type Score, t
 import { formatMeasure, scoreTone, scoreTooltip, sortByRegistry, useScorers } from '../evals'
 import { ScoreChip } from '../components/Scores'
 import { GoldenForm } from '../components/GoldenForm'
+import { Batches } from '../components/Batches'
 
 type Filter = 'all' | 'failing' | 'incorrect' | 'unsourced' | 'refused' | 'disagree' | 'no_golden'
 type FormState = { mode: 'create'; trialId: string; arm: Arm } | { mode: 'edit'; golden: GoldenCase } | null
@@ -150,8 +151,10 @@ function RunDetail({ trial, scorers, expId, golden, onForm }: {
 export function EvalsView({ exp }: { exp: Experiment }) {
   const queryClient = useQueryClient()
   const { list: scorers, byName } = useScorers()
-  const evals = useQuery({ queryKey: ['evals', exp.id], queryFn: () => api.experimentEvals(exp.id) })
-  const trials = useQuery({ queryKey: ['trials', exp.id], queryFn: () => api.trials(exp.id) })
+  const [scope, setScope] = useState('all') // all · arena · a batch id
+  const evals = useQuery({ queryKey: ['evals', exp.id, scope], queryFn: () => api.experimentEvals(exp.id, scope) })
+  const trials = useQuery({ queryKey: ['trials', exp.id, scope], queryFn: () => api.trials(exp.id, scope) })
+  const batchList = useQuery({ queryKey: ['batches', exp.id], queryFn: () => api.batches(exp.id) })
   const golden = useQuery({ queryKey: ['golden', exp.dataset_id], queryFn: () => api.goldenCases(exp.dataset_id) })
   const dataset = useQuery({ queryKey: ['dataset', exp.dataset_id], queryFn: () => api.dataset(exp.dataset_id) })
   const [filter, setFilter] = useState<Filter>('all')
@@ -162,6 +165,7 @@ export function EvalsView({ exp }: { exp: Experiment }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['evals', exp.id] })
       queryClient.invalidateQueries({ queryKey: ['trials', exp.id] })
+      queryClient.invalidateQueries({ queryKey: ['batch'] })
     },
   })
 
@@ -194,7 +198,34 @@ export function EvalsView({ exp }: { exp: Experiment }) {
           </button>
         </section>
 
-        <section>
+        <Batches
+          exp={exp}
+          cases={golden.data ?? []}
+          scorers={scorers}
+          onShowRuns={(id) => {
+            setScope(id)
+            document.getElementById('scorecard')?.scrollIntoView({ behavior: 'smooth' })
+          }}
+        />
+
+        <section id="scorecard">
+          <div className="filter-row">
+            <h2>Scorecard</h2>
+            <label className="scope-pick">
+              Runs from{' '}
+              <select value={scope} onChange={(ev) => setScope(ev.target.value)}>
+                <option value="all">Everywhere</option>
+                <option value="arena">The arena (asked by hand)</option>
+                {(batchList.data ?? []).map((b, i, arr) => (
+                  <option key={b.id} value={b.id}>Batch {arr.length - i} ({b.done} runs)</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="muted small">
+            Raw counts over every run in scope: a question asked 5 times counts 5 times. The batch report above weights
+            each question once and adds error bars.
+          </p>
           <table className="scorecard">
             <thead><tr><th>Eval</th><th>Baseline</th><th>Configured</th></tr></thead>
             <tbody>
@@ -277,6 +308,7 @@ export function EvalsView({ exp }: { exp: Experiment }) {
                       <td className="run-q">
                         {t.question}
                         {t.golden_case_id && <span className="golden-badge inline" title="Graded against a verified answer"><Target size={11} /> golden</span>}
+                        {t.batch_id && <span className="batch-badge" title={`Run ${t.repeat + 1} of a batch`}>batch · run {t.repeat + 1}</span>}
                       </td>
                       {ARMS.map((arm) => (
                         <td key={arm}><Marks scores={t.scores.filter((s) => s.arm === arm)} scorers={scorers} /></td>

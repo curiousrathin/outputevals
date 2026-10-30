@@ -7,15 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.api import configurations, datasets, evals, evidence, experiments, golden, library
+from app.api import batches, configurations, datasets, evals, evidence, experiments, golden, library
 from app.api import settings as settings_api
 from app.config import ROOT, settings
-from app.db import create_db
+from app.core.batches import mark_interrupted
+from app.db import create_db, engine
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     create_db()
+    mark_interrupted(engine)
     yield
 
 
@@ -35,6 +37,7 @@ for router in (
     library.router,
     evals.router,
     golden.router,
+    batches.router,
 ):
     app.include_router(router)
 

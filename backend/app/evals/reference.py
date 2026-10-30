@@ -42,6 +42,31 @@ def _canon_rows(rows: list[list]) -> list[tuple]:
 
 
 @scorer(
+    name="correct", title="Correct", family="correctness", level="response", kind="verdict",
+    version=1, requires=("golden",),
+    measures="One verdict per run: did the answer match the golden answer? Batches build accuracy, pass^k and pass@k on it.",
+    how="Answerable questions: Expected numbers and Expected text both pass (where they apply). Unanswerable ones: Abstained correctly passes. An error or a refused answer is incorrect.",
+    caveat="Inherits its parts' blind spots: it checks the right values appear, not that the sentence around them is right. Query-path evals (columns, execution accuracy) don't count toward it.",
+)
+def correct(ctx: Ctx):
+    g = ctx.golden
+    if not g.answerable:
+        r = ctx.response
+        if r.error or not (r.output or "").strip():
+            return scored(0, False, f"No answer: {r.error or 'the model returned no text'}.")
+        part = abstained(ctx)
+        return scored(part.value, part.passed, part.reason)
+    parts = [(name, fn(ctx)) for name, fn in (("numbers", expected_numbers), ("text", expected_text))]
+    applied = [(name, p) for name, p in parts if p.state == "scored"]
+    if not applied:
+        return not_computed("Neither expected numbers nor expected text could be checked.")
+    failed = [p.reason for _, p in applied if not p.passed]
+    if failed:
+        return scored(0, False, " ".join(failed))
+    return scored(1, True, " ".join(p.reason for _, p in applied))
+
+
+@scorer(
     name="expected_numbers", title="Expected numbers", family="correctness", level="response", kind="verdict",
     version=1, requires=("golden",),
     measures="Whether every number in the correct answer appears in this answer.",
@@ -166,3 +191,4 @@ def execution_accuracy(ctx: Ctx):
         if _canon_rows(got["rows"]) == want:
             return scored(1, True, f"Query {i} returns the same {len(want)} row(s) as the reference query.", query=i)
     return scored(0, False, f"None of the {len(sqls)} quer{'y' if len(sqls) == 1 else 'ies'} returned the reference result ({len(want)} row(s)).")
+

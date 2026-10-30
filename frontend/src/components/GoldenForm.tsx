@@ -71,6 +71,8 @@ function Body({ props, initial, columns }: { props: Props; initial: GoldenIn; co
   const done = () => {
     queryClient.invalidateQueries({ queryKey: ['trials', props.experimentId] })
     queryClient.invalidateQueries({ queryKey: ['evals', props.experimentId] })
+    queryClient.invalidateQueries({ queryKey: ['batch'] })
+    queryClient.invalidateQueries({ queryKey: ['batch-estimate'] })
     queryClient.invalidateQueries({ queryKey: ['golden'] })
     props.onClose()
   }

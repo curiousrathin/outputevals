@@ -416,3 +416,64 @@ table.scorecard, table.runs { width: 100%; border-collapse: collapse; font-size:
 .set-answer + .see-prompt { margin-left: 12px; }
 .detail-actions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .golden-table td { vertical-align: top; }
+
+/* ---------- Batches ---------- */
+.batch-start { padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); }
+.batch-start p { margin: 8px 0 0; }
+.batch-start-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.batch-start-row label { display: inline-flex; align-items: center; gap: 6px; }
+.batch-start-row .link-muted { text-decoration: underline dotted; }
+.batch-start-row input[type='number'] { width: 56px; padding: 4px 6px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); }
+.batch-start-row .btn { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.batch-pick { display: grid; gap: 6px; margin-top: 10px; font-size: 13px; }
+.batch-pick label { display: flex; gap: 8px; align-items: baseline; }
+
+.batch-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin: 14px 0; }
+.batch-item { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); cursor: pointer; display: grid; gap: 3px; }
+.batch-item:hover { background: var(--bg-subtle); }
+.batch-item.active { border-color: var(--text); }
+.batch-item-head { display: flex; justify-content: space-between; align-items: center; }
+.batch-item .error-text { margin: 0; }
+.batch-actions { display: flex; justify-content: flex-end; }
+.batch-actions button { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.mini-bar.progress { max-width: none; }
+.mini-bar.progress i { background: var(--text); }
+.status-chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--bg-muted); color: var(--text-muted); }
+.status-chip.running { background: #f1f5ff; color: #2b4a9b; }
+.status-chip.done { background: #e8f6ee; color: #166c3b; }
+.status-chip.failed { background: #fdf0f0; color: #a83232; }
+.status-chip.interrupted, .status-chip.cancelled { background: #fbf3e4; color: #8a5a00; }
+.batch-badge { margin-left: 8px; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: var(--bg-muted); color: var(--text-muted); vertical-align: 1px; }
+
+.batch-report { display: grid; gap: 14px; margin-top: 6px; }
+.batch-report h3 { font-size: 14px; margin: 8px 0 0; }
+.batch-report > p { margin: 0; }
+.arm-tiles-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
+.arm-tiles h4 { margin: 0 0 8px; font-size: 13px; display: flex; align-items: center; gap: 2px; }
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.tile { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius); min-width: 0; }
+.tile-label { font-size: 12px; color: var(--text-muted); }
+.tile-main { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; margin: 2px 0; }
+
+/* Interval strip: a bar for the 95% interval, a dot for the estimate; the arm's color carries identity. */
+svg.interval { display: block; width: 100%; max-width: 160px; height: 14px; overflow: visible; margin: 4px 0; }
+svg.interval .track { stroke: var(--bg-muted); stroke-width: 4; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+svg.interval .zero { stroke: var(--text-faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
+svg.interval .ci { stroke-width: 4; stroke-linecap: round; vector-effect: non-scaling-stroke; opacity: 0.45; }
+svg.interval .est { stroke: var(--bg); stroke-width: 2; vector-effect: non-scaling-stroke; }
+svg.interval.baseline .ci, svg.interval.baseline .est { fill: var(--text-muted); stroke: var(--text-muted); }
+svg.interval.configured .ci, svg.interval.configured .est, svg.interval.diff .ci, svg.interval.diff .est { fill: var(--accent); stroke: var(--accent); }
+svg.interval .est { stroke: var(--bg); }
+
+.difference { display: grid; grid-template-columns: auto minmax(160px, 260px) 1fr; gap: 18px; align-items: center; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); }
+.difference p { margin: 0; line-height: 1.5; }
+.difference-plot svg.interval { max-width: none; }
+.difference-plot .axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-faint); }
+.run-dots .run-marks { flex-wrap: wrap; }
+.scope-pick { font-size: 13px; color: var(--text-muted); }
+.scope-pick select { font: inherit; padding: 4px 8px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+@media (max-width: 720px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .difference { grid-template-columns: 1fr; }
+}

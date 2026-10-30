@@ -215,7 +215,7 @@ export function ArenaPage({ tab = 'arena' }: { tab?: 'arena' | 'evals' }) {
   const queryClient = useQueryClient()
   const [question, setQuestion] = useState('')
   const exp = useQuery({ queryKey: ['experiment', id], queryFn: () => api.experiment(id!) })
-  const trials = useQuery({ queryKey: ['trials', id], queryFn: () => api.trials(id!) })
+  const trials = useQuery({ queryKey: ['trials', id, 'arena'], queryFn: () => api.trials(id!, 'arena') })
 
   const run = useMutation({
     mutationFn: (q: string) => api.runTrial(id!, q),
@@ -280,6 +280,12 @@ export function ArenaPage({ tab = 'arena' }: { tab?: 'arena' | 'evals' }) {
           </form>
           {run.isError && <div className="notice notice-err">{run.error.message}</div>}
 
+          {e.trial_count > list.length && trials.data && (
+            <div className="notice notice-info">
+              {e.trial_count - list.length} more run{e.trial_count - list.length === 1 ? '' : 's'} from batches{' '}
+              {e.trial_count - list.length === 1 ? 'is' : 'are'} on the <Link to={`/experiments/${e.id}/evals`}>Evals tab</Link>.
+            </div>
+          )}
           {run.isPending && <PendingTrial question={run.variables} exp={e} />}
           {list.map((t) => <TrialCard key={t.id} trial={t} exp={e} />)}
           {!run.isPending && list.length === 0 && (

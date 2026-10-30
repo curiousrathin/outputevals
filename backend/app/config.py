@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     llm_effort: str = "medium"  # low | medium | high | xhigh | max
     # Extra or overriding prices for the cost eval (USD per million tokens); see evals/pricing.py.
     model_prices: dict[str, dict[str, float]] = {}
+    # Batches: runs asked at once (each asks both arms), and the most runs one batch may hold.
+    batch_concurrency: int = 3
+    batch_max_runs: int = 200
     judge_model: str = "claude-opus-5-5"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
 

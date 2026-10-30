@@ -163,7 +163,7 @@ def test_scorers_explain_themselves_and_experiments_still_delete(client, monkeyp
     info = client.get("/api/evals/scorers").json()["scorers"]
     assert [s["name"] for s in info] == [
         "completed", "refs_resolve", "unsourced_numbers", "sql_health", "arms_agree", "latency", "cost",
-        "expected_numbers", "expected_text", "abstained", "right_columns", "execution_accuracy",
+        "correct", "expected_numbers", "expected_text", "abstained", "right_columns", "execution_accuracy",
     ]
     assert all(s["requires"] == ["golden"] for s in info[7:])
     assert all(s["measures"] and s["how"] and s["caveat"] for s in info)

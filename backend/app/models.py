@@ -67,7 +67,33 @@ class Trial(SQLModel, table=True):
     note: str = Field(default="", sa_column=Column(Text))
     # The golden case this question is graded against: "" until one is set or matched.
     golden_case_id: str = Field(default="", index=True)
+    # Set when the run is part of a batch; "" for questions asked in the arena.
+    batch_id: str = Field(default="", index=True)
+    repeat: int = 0  # 0-based repeat number within the batch
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class Batch(SQLModel, table=True):
+    """The golden set asked N times, for both arms, with one frozen configuration.
+
+    The configuration text, model and settings are fixed when the batch starts, so
+    every run in it saw the same thing even if the configuration is edited meanwhile.
+    """
+
+    id: str = Field(default_factory=new_id, primary_key=True)
+    experiment_id: str = Field(foreign_key="experiment.id", index=True)
+    golden_case_ids: list[str] = Field(default_factory=list, sa_column=Column(JSON, default=list))
+    repeats: int
+    total: int  # questions x repeats
+    done: int = 0
+    # running | done | cancelled | failed | interrupted (the server stopped mid-batch)
+    status: str = "running"
+    error: str = Field(default="", sa_column=Column(Text))
+    config_version: str = ""
+    model: str = ""
+    settings: dict = Field(default_factory=dict, sa_column=Column(JSON, default=dict))
+    created_at: datetime = Field(default_factory=utcnow)
+    finished_at: datetime | None = None
 
 
 class GoldenCase(SQLModel, table=True):

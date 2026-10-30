@@ -7,15 +7,11 @@ from sqlmodel import Session, func, select
 
 from app.api.configurations import get_configuration
 from app.api.datasets import get_dataset
-from app.core import arena, golden, library, prompts
-from app.core import datasets as ds
-from app.core.evidence import store_cited
+from app.core import runner
 from app.core.llm import MissingAPIKeyError, get_client
-from app.core.resolver import DraftResolver
-from app.core.sqltool import DataQuery
 from app.db import SessionDep
 from app.evals.service import current_scores, ensure_scores
-from app.models import ArmResponse, Experiment, Score, Trial
+from app.models import ArmResponse, Batch, Experiment, Score, Trial
 
 router = APIRouter(prefix="/api", tags=["experiments"])
 
@@ -54,6 +50,8 @@ class TrialOut(BaseModel):
     config_version: str
     library_files: list[dict]  # [{path, sha256}] the configured arm saw
     golden_case_id: str  # "" until the question has a golden case
+    batch_id: str  # "" for questions asked in the arena
+    repeat: int
     preference: str | None
     note: str
     created_at: datetime
@@ -123,22 +121,34 @@ def read_experiment(experiment_id: str, session: SessionDep):
 @router.delete("/experiments/{experiment_id}", status_code=204)
 def delete_experiment(experiment_id: str, session: SessionDep):
     experiment = _get_experiment(session, experiment_id)
+    if session.exec(select(Batch).where(Batch.experiment_id == experiment_id, Batch.status == "running")).first():
+        raise HTTPException(409, "A batch is running for this experiment. Cancel it first.")
     for trial in session.exec(select(Trial).where(Trial.experiment_id == experiment_id)).all():
         for r in session.exec(select(ArmResponse).where(ArmResponse.trial_id == trial.id)).all():
             session.delete(r)
         for s in session.exec(select(Score).where(Score.trial_id == trial.id)).all():
             session.delete(s)
         session.delete(trial)
+    for b in session.exec(select(Batch).where(Batch.experiment_id == experiment_id)).all():
+        session.delete(b)
     session.delete(experiment)
     session.commit()
 
 
+def scoped_trials(session: Session, experiment_id: str, scope: str = "all") -> list[Trial]:
+    """Runs of an experiment: "all", "arena" (asked by hand) or one batch's id."""
+    q = select(Trial).where(Trial.experiment_id == experiment_id)
+    if scope == "arena":
+        q = q.where(Trial.batch_id == "")
+    elif scope != "all":
+        q = q.where(Trial.batch_id == scope)
+    return list(session.exec(q.order_by(Trial.created_at.desc())).all())
+
+
 @router.get("/experiments/{experiment_id}/trials", response_model=list[TrialOut])
-def list_trials(experiment_id: str, session: SessionDep):
+def list_trials(experiment_id: str, session: SessionDep, scope: str = "all"):
     _get_experiment(session, experiment_id)
-    trials = session.exec(
-        select(Trial).where(Trial.experiment_id == experiment_id).order_by(Trial.created_at.desc())
-    ).all()
+    trials = scoped_trials(session, experiment_id, scope)
     ensure_scores(session, list(trials))  # backfills runs from before an eval existed
     scores = current_scores(session, [t.id for t in trials])
     return [_trial_out(session, t, scores[t.id]) for t in trials]
@@ -153,65 +163,14 @@ def run_trial(experiment_id: str, body: TrialIn, session: SessionDep):
     config = get_configuration(session, experiment.configuration_id)
     dataset = get_dataset(session, config.dataset_id)
     try:
-        files = library.resolve_attachments(config.attachments)
-    except library.LibraryError as e:
+        setup = runner.prepare(experiment, config, dataset)
+    except runner.RunError as e:
         raise HTTPException(422, str(e)) from e
     try:
         client = get_client()
     except MissingAPIKeyError as e:
         raise HTTPException(400, str(e)) from e
-
-    # Every dataset is queried, never pasted into the prompt, so every number can be cited.
-    csv_text = ds.read_text(dataset.id)
-    csv_path = ds.dataset_path(dataset.id)
-    query = DataQuery(csv_path)
-    try:
-        data_text = prompts.query_data_text(dataset, csv_text, query.schema())
-    finally:
-        query.close()
-
-    config_text = prompts.configuration_text(config, dataset, files)
-    systems = {
-        "baseline": prompts.build_system(data_text, None),
-        "configured": prompts.build_system(data_text, config_text),
-    }
-    results = arena.run_both(
-        client,
-        systems,
-        question,
-        tags={"experiment_id": experiment.id, "dataset_id": dataset.id},
-        csv_path=csv_path,
-        source=dataset.sha256,
-    )
-
-    # Persist what each arm cited, then render every draft fail-closed:
-    # one unknown {{ev:*}} reference and that arm's answer is refused, not shown.
-    for r in results:
-        store_cited(session, r["tool_calls"], dataset.sha256, dataset.id)
-    resolver = DraftResolver(session)
-    for r in results:
-        if not r.get("output"):
-            continue
-        rendered = resolver.render(r["output"])
-        r["render_ok"] = rendered.ok
-        r["rendered_output"] = rendered.text or ""
-        r["missing_refs"] = rendered.missing
-
-    trial = Trial(
-        experiment_id=experiment.id,
-        question=question,
-        config_version=prompts.config_version(config_text),
-        library_files=[{"path": f["path"], "sha256": f["sha256"]} for f in files],
-    )
-    case = golden.match(session, dataset.id, question)  # exact match only; never "similar"
-    if case:
-        trial.golden_case_id = case.id
-    session.add(trial)
-    for r in results:
-        session.add(ArmResponse(trial_id=trial.id, **r))
-    session.commit()
-    session.refresh(trial)
-    ensure_scores(session, [trial])  # every run is scored as soon as it exists
+    trial = runner.execute(session, client, setup, question)
     return _trial_out(session, trial)
 
 

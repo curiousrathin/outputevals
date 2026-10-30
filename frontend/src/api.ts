@@ -155,6 +155,8 @@ export interface Trial {
   config_version: string
   library_files: { path: string; sha256: string }[] // what the configured arm saw
   golden_case_id: string // '' until the question has a golden case
+  batch_id: string // '' for questions asked in the arena
+  repeat: number
   preference: Preference | null
   note: string
   created_at: string
@@ -249,6 +251,84 @@ export interface GoldenDraft extends Partial<GoldenIn> {
   dataset_columns: string[]
 }
 
+// ---------- Batches ----------
+export type BatchStatus = 'running' | 'done' | 'cancelled' | 'failed' | 'interrupted'
+
+export interface Batch {
+  id: string
+  experiment_id: string
+  golden_case_ids: string[]
+  repeats: number
+  total: number
+  done: number
+  status: BatchStatus
+  error: string
+  config_version: string
+  model: string
+  settings: Record<string, unknown>
+  created_at: string
+  finished_at: string | null
+}
+
+export interface BatchEstimate {
+  questions: number
+  repeats: number
+  runs: number
+  model_calls_at_least: number
+  est_cost_usd: number | null
+  est_minutes: number | null
+  based_on_runs: number
+  max_runs: number
+  max_repeats: number
+  concurrency: number
+}
+
+/** A pass rate averaged over questions, with a 95% interval (null with too few runs). */
+export interface Rate {
+  mean: number
+  lo: number | null
+  hi: number | null
+  questions: number
+  runs?: number
+}
+
+export interface Count { count: number; of: number }
+
+export interface ArmSummary {
+  accuracy: Rate | null
+  pass_all: Count
+  pass_any: Count
+  consistent: Count
+  errors: number
+  latency: { p50: number; p95: number } | null
+  cost: { total: number; per_run: number } | null
+}
+
+export interface BatchRun {
+  trial_id: string
+  repeat: number
+  correct: boolean | null
+  reason: string
+  answer: string
+}
+
+export interface BatchQuestion {
+  golden_case_id: string
+  question: string
+  category: string
+  held_out: boolean
+  arms: Record<Arm, { runs: BatchRun[]; judged: number; passed: number; distinct_answers: number; same_answer_share: number | null }>
+}
+
+export interface BatchReport {
+  repeats: number
+  runs_done: number
+  arms: Record<Arm, ArmSummary>
+  difference: Rate | null
+  questions: BatchQuestion[]
+  evals: (Rate & { scorer: string; arm: Arm })[]
+}
+
 export const api = {
   anthropicStatus: () => request<AnthropicStatus>('/api/settings/anthropic'),
   saveAnthropicKey: (api_key: string) => request<KeyCheckResult>('/api/settings/anthropic', json('PUT', { api_key })),
@@ -282,7 +362,7 @@ export const api = {
     request<void>(`/api/library/item?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
 
   scorers: () => request<{ scorers: ScorerInfo[]; unlock_hints: Record<string, string> }>('/api/evals/scorers'),
-  experimentEvals: (id: string) => request<ExperimentEvals>(`/api/experiments/${id}/evals`),
+  experimentEvals: (id: string, scope = 'all') => request<ExperimentEvals>(`/api/experiments/${id}/evals?scope=${encodeURIComponent(scope)}`),
   rescoreExperiment: (id: string) => request<ExperimentEvals>(`/api/experiments/${id}/evals/rescore`, { method: 'POST' }),
 
   goldenCases: (datasetId: string) => request<GoldenCase[]>(`/api/datasets/${datasetId}/golden`),
@@ -297,7 +377,17 @@ export const api = {
     request<Experiment>('/api/experiments', json('POST', body)),
   deleteExperiment: (id: string) => request<void>(`/api/experiments/${id}`, { method: 'DELETE' }),
 
-  trials: (experimentId: string) => request<Trial[]>(`/api/experiments/${experimentId}/trials`),
+  trials: (experimentId: string, scope = 'all') =>
+    request<Trial[]>(`/api/experiments/${experimentId}/trials?scope=${encodeURIComponent(scope)}`),
+
+  batches: (experimentId: string) => request<Batch[]>(`/api/experiments/${experimentId}/batches`),
+  batchEstimate: (experimentId: string, repeats: number, cases: string[]) =>
+    request<BatchEstimate>(`/api/experiments/${experimentId}/batches/estimate?repeats=${repeats}&cases=${cases.join(',')}`),
+  startBatch: (experimentId: string, repeats: number, golden_case_ids: string[]) =>
+    request<Batch>(`/api/experiments/${experimentId}/batches`, json('POST', { repeats, golden_case_ids })),
+  batch: (id: string) => request<{ batch: Batch; report: BatchReport }>(`/api/batches/${id}`),
+  cancelBatch: (id: string) => request<Batch>(`/api/batches/${id}/cancel`, { method: 'POST' }),
+  deleteBatch: (id: string) => request<void>(`/api/batches/${id}`, { method: 'DELETE' }),
   runTrial: (experimentId: string, question: string) =>
     request<Trial>(`/api/experiments/${experimentId}/trials`, json('POST', { question })),
   updateTrial: (id: string, body: { preference?: Preference | null; note?: string }) =>
